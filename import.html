@@ -131,11 +131,23 @@ const FIELDS = [
   ['name', '이름 (필수)', /이름|성명/],
   ['birth', '생년월일', /생년|생일|birth/i],
   ['phone', '전화번호 (본인)', /^전화|연락처|휴대|핸드폰|phone/i],
-  ['parentPhone', '보호자 연락처', /보호자|부모|학부모/],
+  ['parentPhone', '연락처(보호자)', /보호자|학부모/],
+  ['parentF', '연락처(부)', /\(부\)|아버지/],
+  ['parentM', '연락처(모)', /\(모\)|어머니/],
+  ['sacr', '신급', /신급/],
+  ['gender', '성별', /성별/],
   ['address', '주소', /주소/],
   ['school', '학교', /학교/],
   ['grade', '학년(반)', /학년|반$|class/i]
 ];
+function normSacr(v) {
+  const s = String(v || '').trim();
+  if (!s || /해당없음|없음|무/.test(s)) return '없음';
+  if (s.includes('유아')) return '유아세례';
+  if (s.includes('세례')) return '세례';
+  if (s.includes('입교')) return '입교';
+  return s;
+}
 
 function buildMaps() {
   $('colmaps').innerHTML = FIELDS.map(([key, label, re]) => {
@@ -210,8 +222,10 @@ function collectParsed() {
     const cls = clsMap['*'] || clsMap[gradeVal] || CLASSES[0] || '';
     const st = {
       name, cls, birth: normBirth(get('birth')), phone: normPhone(get('phone')),
+      fatherPhone: normPhone(get('parentF')), motherPhone: normPhone(get('parentM')),
       parentPhone: normPhone(get('parentPhone')), address: get('address'), school: get('school'),
-      sacr: '없음', trait: '', att: {}, reasons: {}, care: null, notes: [], vchk: {}
+      sacr: normSacr(get('sacr')), gender: get('gender'), trait: '',
+      att: {}, reasons: {}, care: null, notes: [], vchk: {}
     };
     const key = dupKey(st);
     st._dup = existKeys.has(key) || seen.has(key);
@@ -225,8 +239,8 @@ function preview() {
   if (!PARSED) return;
   const dups = PARSED.filter(s => s._dup).length;
   $('pv').innerHTML = `<div class="muted">총 ${PARSED.length}명 · 새로 추가 ${PARSED.length - dups}명 ${dups ? '· <span class="skip">중복(이름+생년월일 일치)으로 건너뜀 ' + dups + '명</span>' : ''}</div>
-  <div style="overflow-x:auto"><table><tr><th></th><th>이름</th><th>반</th><th>생년월일</th><th>전화번호</th><th>보호자</th><th>주소</th><th>학교</th></tr>
-  ${PARSED.map(s => `<tr ${s._dup ? 'style="opacity:.45"' : ''}><td>${s._dup ? '건너뜀' : '추가'}</td><td>${esc(s.name)}</td><td>${esc(s.cls)}</td><td>${esc(s.birth)}</td><td>${esc(s.phone)}</td><td>${esc(s.parentPhone)}</td><td>${esc(s.address)}</td><td>${esc(s.school)}</td></tr>`).join('')}
+  <div style="overflow-x:auto"><table><tr><th></th><th>이름</th><th>반</th><th>생년월일</th><th>신급</th><th>전화번호</th><th>부</th><th>모</th><th>보호자</th><th>주소</th><th>학교</th></tr>
+  ${PARSED.map(s => `<tr ${s._dup ? 'style="opacity:.45"' : ''}><td>${s._dup ? '건너뜀' : '추가'}</td><td>${esc(s.name)}</td><td>${esc(s.cls)}</td><td>${esc(s.birth)}</td><td>${esc(s.sacr)}</td><td>${esc(s.phone)}</td><td>${esc(s.fatherPhone)}</td><td>${esc(s.motherPhone)}</td><td>${esc(s.parentPhone)}</td><td>${esc(s.address)}</td><td>${esc(s.school)}</td></tr>`).join('')}
   </table></div>`;
   $('step4').style.display = '';
   $('go').disabled = false;

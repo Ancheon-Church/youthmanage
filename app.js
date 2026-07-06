@@ -13,8 +13,8 @@ const h = fn => { H.push(fn); return 'H[' + (H.length - 1) + '](event)'; };
 const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 // 폼 입력값 보존 (재렌더링 시)
-const FORM_IDS = ['lg-id', 'v-text', 'v-stu', 'ad-name', 'ad-phone', 'ad-birth', 'ad-parent', 'ad-addr',
-  'ed-name', 'ed-phone', 'ed-parentPhone', 'ed-address', 'ed-birth', 'ed-school', 'ed-trait',
+const FORM_IDS = ['lg-id', 'v-text', 'v-stu', 'ad-name', 'ad-phone', 'ad-birth', 'ad-father', 'ad-mother', 'ad-parent', 'ad-addr',
+  'ed-name', 'ed-phone', 'ed-fatherPhone', 'ed-motherPhone', 'ed-parentPhone', 'ed-address', 'ed-birth', 'ed-school', 'ed-trait',
   'pw-old', 'pw-new', 'u-name', 'u-username', 'u-pw', 'u-role', 'u-cls', 'cls-text', 'note-text'];
 let F = {};
 function capture() { FORM_IDS.forEach(id => { const e = document.getElementById(id); if (e) F[id] = e.value; }); }
@@ -312,13 +312,14 @@ function classHomeView(scopeCls) {
       }).join('')}
     </div>` : '';
 
-  const adFields = [['ad-name', '이름 *'], ['ad-phone', '연락처 (010-…)'], ['ad-birth', '생년월일 (2012.03.14)'], ['ad-parent', '보호자 연락처'], ['ad-addr', '주소']];
+  const adFields = [['ad-name', '이름 *'], ['ad-phone', '연락처 (010-…)'], ['ad-birth', '생년월일 (2012.03.14)'], ['ad-father', '연락처(부)'], ['ad-mother', '연락처(모)'], ['ad-parent', '연락처(보호자)'], ['ad-addr', '주소']];
   const adSubmit = h(async () => {
     capture();
     const name = fv('ad-name').trim();
     if (!name) { flash('이름을 입력해주세요'); return; }
     const okd = await fsTry(DB.collection('students').add({
-      name, cls: scopeCls, school: '', phone: fv('ad-phone'), parentPhone: fv('ad-parent'),
+      name, cls: scopeCls, school: '', phone: fv('ad-phone'),
+      fatherPhone: fv('ad-father'), motherPhone: fv('ad-mother'), parentPhone: fv('ad-parent'),
       address: fv('ad-addr'), sacr: '없음', birth: fv('ad-birth'), trait: '새친구 · 성향 기록 전',
       att: {}, reasons: {}, care: null, notes: [], vchk: {}, ts: Date.now()
     }));
@@ -527,7 +528,7 @@ function studentView(st) {
   const back = h(() => up(() => { S.sid = null; S.edOn = false; S.delArm = false; }));
 
   // 교적 (보기/수정)
-  const edFieldDefs = [['ed-name', '이름', st.name], ['ed-phone', '본인 연락처', st.phone], ['ed-parentPhone', '보호자', st.parentPhone], ['ed-address', '주소', st.address], ['ed-birth', '생년월일', st.birth], ['ed-school', '학교', st.school], ['ed-trait', '성향', st.trait]];
+  const edFieldDefs = [['ed-name', '이름', st.name], ['ed-phone', '본인 연락처', st.phone], ['ed-fatherPhone', '연락처(부)', st.fatherPhone], ['ed-motherPhone', '연락처(모)', st.motherPhone], ['ed-parentPhone', '연락처(보호자)', st.parentPhone], ['ed-address', '주소', st.address], ['ed-birth', '생년월일', st.birth], ['ed-school', '학교', st.school], ['ed-trait', '성향', st.trait]];
   const edToggle = h(() => up(() => {
     if (S.edOn) { S.edOn = false; clearF('ed-'); }
     else { S.edOn = true; S.edSacr = st.sacr || '없음'; edFieldDefs.forEach(([id, , val]) => F[id] = val || ''); }
@@ -535,7 +536,7 @@ function studentView(st) {
   const edSave = h(async () => {
     capture();
     if (!fv('ed-name').trim()) { flash('이름은 비울 수 없어요'); return; }
-    const okd = await fsTry(stuRef(st.id).update({ name: fv('ed-name').trim(), phone: fv('ed-phone'), parentPhone: fv('ed-parentPhone'), address: fv('ed-address'), birth: fv('ed-birth'), school: fv('ed-school'), trait: fv('ed-trait'), sacr: S.edSacr }));
+    const okd = await fsTry(stuRef(st.id).update({ name: fv('ed-name').trim(), phone: fv('ed-phone'), fatherPhone: fv('ed-fatherPhone'), motherPhone: fv('ed-motherPhone'), parentPhone: fv('ed-parentPhone'), address: fv('ed-address'), birth: fv('ed-birth'), school: fv('ed-school'), trait: fv('ed-trait'), sacr: S.edSacr }));
     if (okd) { S.edOn = false; clearF('ed-'); flash('교적을 수정했어요'); }
   });
   const edForm = `<div style="margin:0 20px;background:#fff;border:1px solid #cfc9ba;border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:8px">
@@ -551,7 +552,7 @@ function studentView(st) {
     </div>
     <div onclick="${edSave}" style="${primaryBtn};margin-top:4px">교적 저장</div>
   </div>`;
-  const infoRows = [['연락처 (본인)', dash(st.phone)], ['연락처 (보호자)', dash(st.parentPhone)], ['주소', dash(st.address)], ['생년월일', dash(st.birth)], ['학교', dash(st.school)], ['신급 (세례·입교)', st.sacr || '없음'], ['성향', dash(st.trait)]];
+  const infoRows = [['연락처 (본인)', dash(st.phone)], ['연락처 (부)', dash(st.fatherPhone)], ['연락처 (모)', dash(st.motherPhone)], ['연락처 (보호자)', dash(st.parentPhone)], ['주소', dash(st.address)], ['생년월일', dash(st.birth)], ['학교', dash(st.school)], ['신급 (세례·입교)', st.sacr || '없음'], ['성향', dash(st.trait)]];
   const infoView = `<div style="margin:0 20px;background:#fff;border:1px solid #e8e4da;border-radius:14px;padding:4px 16px">
     ${infoRows.map(([label, value]) => `<div style="display:flex;justify-content:space-between;gap:16px;padding:11px 0;border-bottom:1px solid #eeeade">
       <span style="font:500 13px Pretendard;color:#8a8578;flex:none">${label}</span>
