@@ -6,7 +6,7 @@ let S = {
   me: null, data: { classes: [], users: [], students: [], visits: [] },
   cls: '전체', screen: 'home', sid: null, toast: '',
   vOpen: false, vType: '심방', edOn: false, edSacr: '없음', adOpen: false,
-  delArm: false, loginErr: '', loaded: false, busy: false
+  delArm: false, loginErr: '', loaded: false, busy: false, shirtPick: null, shirtPickU: null
 };
 window.H = [];
 const h = fn => { H.push(fn); return 'H[' + (H.length - 1) + '](event)'; };
@@ -33,6 +33,10 @@ function todayLabel() {
   return d.getFullYear() + '년 ' + (d.getMonth() + 1) + '월 ' + d.getDate() + '일 ' + W[d.getDay()] + '요일';
 }
 const LONG_ABS_N = 3, BDAY_DAYS = 30;
+// ── 캠프티 사이즈 조사 (수련회 이벤트 · 기간 한정)
+const SHIRT_SIZES = ['미선택', '130', '140', '150', 'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '신청X'];
+const SHIRT_START = '2026-07-06', SHIRT_END = '2026-07-12';
+const shirtActive = () => { const t = todayISO(); return t >= SHIRT_START && t <= SHIRT_END; };
 const DEFAULT_CLASSES = ['중1-1', '중1-2', '중2', '중3-1', '중3-2', '중3-3', '고1-1', '고1-2', '고2', '고3'];
 
 // ── 데이터 헬퍼
@@ -186,6 +190,36 @@ const primaryBtn = 'padding:12px;border-radius:10px;background:#2e5d47;text-alig
 const darkBtn = 'padding:12px;border-radius:10px;background:#211f1a;text-align:center;font:600 14px Pretendard;color:#f5f2ea;cursor:pointer';
 const secLabel = 'padding:20px 20px 6px;font:600 12px Pretendard;color:#8a8578;letter-spacing:.06em';
 
+// ══ 선생님 캠프티 입력 (이벤트 기간에만 표시)
+function userShirtRows(list) {
+  if (!shirtActive() || !list.length) return '';
+  return `<div style="${secLabel}">선생님 캠프티</div>
+  <div style="margin:0 20px;background:#fff;border:1px solid #e8e4da;border-radius:14px;padding:4px 16px">
+    ${list.map(u => {
+      const btn = `<span onclick="${h(() => up(() => { S.shirtPickU = S.shirtPickU === u.email ? null : u.email; }))}" style="cursor:pointer;font:600 12px Pretendard;flex:none;padding:5px 12px;border-radius:99px;${u.shirt ? 'color:#f5f2ea;background:#2e5d47' : 'color:#2e5d47;border:1px dashed #9db8a8;background:#fff'}">${esc(u.shirt || '캠프티')}</span>`;
+      const picker = S.shirtPickU === u.email ? `<div style="display:flex;flex-wrap:wrap;gap:6px;padding:2px 0 10px;border-bottom:1px solid #eeeade">
+        ${SHIRT_SIZES.map(sz => `<span onclick="${h(async () => { await fsTry(DB.collection('users').doc(u.email).update({ shirt: sz === '미선택' ? FV().delete() : sz })); S.shirtPickU = null; capture(); render(); })}" style="cursor:pointer;flex:none;font:600 12px Pretendard;padding:7px 12px;border-radius:99px;${(u.shirt || '미선택') === sz ? 'color:#f5f2ea;background:#211f1a' : 'color:#8a8578;border:1px solid #e8e4da'}">${sz}</span>`).join('')}
+      </div>` : '';
+      return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #eeeade">
+        <span style="font:600 14px Pretendard;color:#211f1a">${esc(u.name)} <span style="font:400 12px Pretendard;color:#b5b0a2">${u.role === 'pastor' ? '교역자' : '선생님'}</span></span>${btn}
+      </div>${picker}`;
+    }).join('')}
+    <div style="height:4px"></div>
+  </div>`;
+}
+
+// ══ 캠프티 통계 (이벤트 기간에만 표시)
+function shirtStats(list) {
+  if (!shirtActive() || !list.length) return '';
+  const counts = {};
+  list.forEach(x => { const k = x.shirt || '미선택'; counts[k] = (counts[k] || 0) + 1; });
+  const chips = SHIRT_SIZES.filter(sz => counts[sz]).map(sz =>
+    `<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #eeeade;font:500 13px Pretendard;color:${sz === '미선택' ? '#a3552e' : '#211f1a'}"><span>${sz}</span><b>${counts[sz]}명</b></div>`).join('');
+  const done = list.filter(x => x.shirt).length;
+  return `<div style="${secLabel}">캠프티 사이즈 통계 <span style="font:400 11px;color:#b5b0a2">· ${md(SHIRT_END)}까지 조사 · ${done}/${list.length} 완료</span></div>
+    <div style="margin:0 20px;background:#fff;border:1px solid #e8e4da;border-radius:14px;padding:6px 16px">${chips}<div style="height:6px"></div></div>`;
+}
+
 // ══ 설정 안내 화면 (firebase-config.js 미입력 시)
 function setupView() {
   return `<div style="width:100%;max-width:390px;margin:0 auto;min-height:100vh;overflow-x:hidden;background:#faf8f3;display:flex;flex-direction:column;justify-content:center;padding:36px 28px;box-shadow:0 0 40px rgba(33,31,26,.15)">
@@ -285,6 +319,8 @@ function overviewView() {
     </div>
     <div style="${secLabel};padding-top:20px;padding-bottom:8px">반별 현황 · 지난주 기준</div>
     <div style="display:flex;flex-direction:column;gap:8px;padding:0 20px">${rows || `<div style="font:400 13px Pretendard;color:#b5b0a2;padding:8px 2px">아직 반이 없습니다. 설정에서 반을 추가하세요.</div>`}</div>
+    ${userShirtRows(users())}
+    ${shirtStats(D.concat(users()))}
   </div>`;
 }
 
@@ -340,16 +376,21 @@ function classHomeView(scopeCls) {
       return `<span style="width:9px;height:9px;border-radius:50%;display:inline-block;background:${a === 'P' ? '#2e5d47' : a === 'L' ? '#b0913e' : a === 'A' ? '#ddd6c6' : '#eeeade'}"></span>`;
     }).join('');
     const vToggle = h(async e => { e.stopPropagation(); await fsTry(stuRef(x.id).update({ ['vchk.' + curWeek()]: !vd })); capture(); render(); });
+    const shirtBtn = shirtActive() ? `<span onclick="${h(e => { e.stopPropagation(); up(() => { S.shirtPick = S.shirtPick === x.id ? null : x.id; }); })}" style="cursor:pointer;font:600 10.5px Pretendard;flex:none;padding:3px 8px;border-radius:99px;${x.shirt ? 'color:#f5f2ea;background:#2e5d47' : 'color:#2e5d47;border:1px dashed #9db8a8;background:#fff'}">${esc(x.shirt || '캠프티')}</span>` : '';
+    const picker = (shirtActive() && S.shirtPick === x.id) ? `<div style="display:flex;flex-wrap:wrap;gap:6px;padding:10px 0;border-bottom:1px solid #eeeade">
+      ${SHIRT_SIZES.map(sz => `<span onclick="${h(async () => { await fsTry(stuRef(x.id).update({ shirt: sz === '미선택' ? FV().delete() : sz })); S.shirtPick = null; capture(); render(); })}" style="cursor:pointer;flex:none;font:600 12px Pretendard;padding:7px 12px;border-radius:99px;${(x.shirt || '미선택') === sz ? 'color:#f5f2ea;background:#211f1a' : 'color:#8a8578;border:1px solid #e8e4da'}">${sz}</span>`).join('')}
+    </div>` : '';
     return `<div onclick="${h(openStu(x.id))}" style="display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid #eeeade;cursor:pointer">
       <div style="flex:1;min-width:0;display:flex;align-items:center;gap:7px">
         <span style="font:600 15px Pretendard;color:#211f1a">${esc(x.name)}</span>
         ${t ? `<span style="${badgeStyle(t)}">${esc(t)}</span>` : ''}
         ${!vd ? `<span style="font:600 10.5px Pretendard;color:#a3552e;border:1px dashed #d8bfa8;padding:3px 8px;border-radius:99px;flex:none">미심방</span>` : ''}
+        ${shirtBtn}
       </div>
       <div style="display:flex;gap:3px">${dots}</div>
       <div style="font:500 12px Pretendard;color:#8a8578;width:40px;text-align:right">${r === null ? (isNew(x) ? '신규' : '–') : r + '%'}</div>
       <div onclick="${vToggle}" title="이번 주 심방 완료 체크" style="flex:none;width:22px;height:22px;border-radius:7px;cursor:pointer;display:flex;align-items:center;justify-content:center;font:700 13px Pretendard;${vd ? 'background:#2e5d47;color:#fff' : 'background:#fff;border:1.5px solid #cfc9ba;color:transparent'}">${vd ? '✓' : ''}</div>
-    </div>`;
+    </div>${picker}`;
   }).join('');
 
   return `<div>
@@ -365,6 +406,8 @@ function classHomeView(scopeCls) {
     </div>
     ${adForm}
     <div style="display:flex;flex-direction:column;padding:0 20px">${rows || `<div style="font:400 13px Pretendard;color:#b5b0a2;padding:8px 2px">아직 학생이 없습니다. '+ 새친구'로 명단을 만들어보세요.</div>`}</div>
+    ${userShirtRows(users().filter(u => u.cls === scopeCls))}
+    ${shirtStats(list.concat(users().filter(u => u.cls === scopeCls)))}
   </div>`;
 }
 
