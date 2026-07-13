@@ -4,6 +4,7 @@
 // ── 전역 상태
 let S = {
   me: null, data: { classes: [], users: [], students: [], visits: [], posts: [], comments: [], events: [], eventVotes: [] },
+  dataReady: false, dataError: '', dataSlow: false,
   cls: '전체', screen: 'home', sid: null, toast: '',
   vOpen: false, vType: '심방', careMode: 'visits', communityMode: 'board',
   attendanceTab: 'students',
@@ -52,6 +53,41 @@ const RETREAT_START = '2026-07-12', RETREAT_END = '2026-07-26';
 const retreatActive = () => { const t = todayISO(); return t >= RETREAT_START && t <= RETREAT_END; };
 const DEFAULT_CLASSES = ['중1-1', '중1-2', '중2', '중3-1', '중3-2', '중3-3', '고1-1', '고1-2', '고2', '고3'];
 const BOARD_CATEGORIES = ['공지', '나눔', '회의록'];
+const INITIAL_DATA_KEYS = ['classes', 'users', 'students', 'visits', 'posts', 'comments', 'events', 'eventVotes'];
+const DATA_LABELS = { classes: '반 목록', users: '교사·교역자', students: '학생', visits: '심방', posts: '게시판', comments: '댓글', events: '일정', eventVotes: '일정 투표' };
+let initialDataPending = new Set(INITIAL_DATA_KEYS);
+let dataLoadTimer = null;
+
+function emptyData() {
+  return { classes: [], users: [], students: [], visits: [], posts: [], comments: [], events: [], eventVotes: [] };
+}
+function resetInitialDataLoad() {
+  clearTimeout(dataLoadTimer); dataLoadTimer = null;
+  initialDataPending = new Set(INITIAL_DATA_KEYS);
+  S.data = emptyData(); S.dataReady = false; S.dataError = ''; S.dataSlow = false;
+}
+function startInitialDataLoadTimer() {
+  clearTimeout(dataLoadTimer);
+  dataLoadTimer = setTimeout(() => {
+    if (!S.dataReady && !S.dataError && S.me) { S.dataSlow = true; render(); }
+  }, 10000);
+}
+function markInitialDataLoaded(key, snapshot) {
+  if (snapshot && snapshot.metadata && snapshot.metadata.fromCache) return;
+  initialDataPending.delete(key);
+  S.dataReady = initialDataPending.size === 0;
+  if (S.dataReady) { clearTimeout(dataLoadTimer); dataLoadTimer = null; S.dataSlow = false; }
+}
+function isUnconfirmedMissingDocument(snapshot) {
+  return !!(snapshot && !snapshot.exists && snapshot.metadata && snapshot.metadata.fromCache);
+}
+function failInitialDataLoad(key, error) {
+  clearTimeout(dataLoadTimer); dataLoadTimer = null;
+  console.error(error);
+  S.dataError = (DATA_LABELS[key] || '교회') + ' 데이터를 불러오지 못했습니다.';
+  S.dataReady = false;
+  render();
+}
 
 // ── 데이터 헬퍼
 const students = () => S.data.students || [];
@@ -142,7 +178,7 @@ function scopeStudents() {
 }
 
 // ═══ Firebase 데이터 계층 ═══
-let AUTH = null, DB = null, unsubs = [];
+let AUTH = null, DB = null, unsubs = [], authEpoch = 0;
 const configMissing = () => !window.FIREBASE_CONFIG || String(window.FIREBASE_CONFIG.apiKey || '').indexOf('PASTE') === 0;
 
 function initFirebase() {
@@ -151,22 +187,36 @@ function initFirebase() {
   AUTH = firebase.auth();
   DB = firebase.firestore();
   AUTH.onAuthStateChanged(async u => {
+    const epoch = ++authEpoch;
     detach();
-    if (!u) { S.me = null; S.loaded = true; render(); return; }
-    try { await afterLogin(u); }
-    catch (e) { S.loginErr = '계정 정보를 불러오지 못했습니다: ' + (e.message || e); S.loaded = true; try { await AUTH.signOut(); } catch (e2) {} render(); }
+    S.me = null; resetInitialDataLoad();
+    if (!u) { S.loaded = true; render(); return; }
+    S.loaded = false; render();
+    try { await afterLogin(u, epoch); }
+    catch (e) {
+      if (!isCurrentAuthSession(u, epoch)) return;
+      S.loginErr = '계정 정보를 불러오지 못했습니다: ' + (e.message || e); S.loaded = true; try { await AUTH.signOut(); } catch (e2) {} render();
+    }
   });
 }
 
-async function afterLogin(u) {
+function isCurrentAuthSession(user, epoch) {
+  return epoch === authEpoch && !!(AUTH && AUTH.currentUser && user && AUTH.currentUser.uid === user.uid);
+}
+
+async function afterLogin(u, epoch) {
   const email = u.email;
   let doc = await DB.collection('users').doc(email).get();
+  if (!isCurrentAuthSession(u, epoch)) return;
   if (!doc.exists) {
     const any = await DB.collection('users').limit(1).get();
+    if (!isCurrentAuthSession(u, epoch)) return;
     if (any.empty) {
       // 최초 로그인 계정 = 자동으로 교역자(관리자)
       await DB.collection('users').doc(email).set({ name: '관리자', role: 'pastor', cls: '전체' });
+      if (!isCurrentAuthSession(u, epoch)) return;
       doc = await DB.collection('users').doc(email).get();
+      if (!isCurrentAuthSession(u, epoch)) return;
     } else {
       S.loginErr = '이 계정에 권한 정보가 없습니다. 담당 교역자에게 문의하세요.';
       S.loaded = true;
@@ -176,57 +226,79 @@ async function afterLogin(u) {
   }
   const info = doc.data();
   S.me = { email, username: email.split('@')[0], name: info.name, role: info.role, cls: info.cls };
+  resetInitialDataLoad();
+  startInitialDataLoadTimer();
   S.cls = info.role === 'pastor' ? '전체' : info.cls;
   S.screen = 'home'; S.sid = null; S.loginErr = ''; S.loaded = true; F = {};
-  attach();
+  attach(epoch);
   render();
 }
 
 function detach() { unsubs.forEach(fn => { try { fn(); } catch (e) {} }); unsubs = []; }
 
-function attach() {
+function attach(epoch) {
+  const active = () => epoch === authEpoch;
+  const onLoadError = key => error => { if (active()) failInitialDataLoad(key, error); };
   // 반 목록
-  unsubs.push(DB.collection('meta').doc('config').onSnapshot(async d => {
+  unsubs.push(DB.collection('meta').doc('config').onSnapshot({ includeMetadataChanges: true }, async d => {
+    if (!active()) return;
+    if (isUnconfirmedMissingDocument(d)) return;
     if (!d.exists) {
       if (S.me && S.me.role === 'pastor') { try { await DB.collection('meta').doc('config').set({ classes: DEFAULT_CLASSES }); } catch (e) {} }
+      if (!active()) return;
       S.data.classes = DEFAULT_CLASSES.slice();
     } else S.data.classes = d.data().classes || [];
+    markInitialDataLoaded('classes', d);
     maybeRender();
-  }, e => console.error(e)));
+  }, onLoadError('classes')));
   // 계정(권한) 목록
-  unsubs.push(DB.collection('users').onSnapshot(q => {
+  unsubs.push(DB.collection('users').onSnapshot({ includeMetadataChanges: true }, q => {
+    if (!active()) return;
     S.data.users = q.docs.map(d => Object.assign({ email: d.id }, d.data()));
     const mine = S.data.users.find(x => x.email === S.me.email);
     if (mine) { S.me.name = mine.name; S.me.role = mine.role; S.me.cls = mine.cls; if (mine.role !== 'pastor') S.cls = mine.cls; }
+    markInitialDataLoaded('users', q);
     maybeRender();
-  }, e => console.error(e)));
+  }, onLoadError('users')));
   // 학생
-  unsubs.push(DB.collection('students').onSnapshot(q => {
+  unsubs.push(DB.collection('students').onSnapshot({ includeMetadataChanges: true }, q => {
+    if (!active()) return;
     S.data.students = q.docs.map(d => Object.assign({ id: d.id }, d.data())).sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    markInitialDataLoaded('students', q);
     maybeRender();
-  }, e => console.error(e)));
+  }, onLoadError('students')));
   // 심방기록
-  unsubs.push(DB.collection('visits').onSnapshot(q => {
+  unsubs.push(DB.collection('visits').onSnapshot({ includeMetadataChanges: true }, q => {
+    if (!active()) return;
     S.data.visits = q.docs.map(d => Object.assign({ id: d.id }, d.data()));
+    markInitialDataLoaded('visits', q);
     maybeRender();
-  }, e => console.error(e)));
+  }, onLoadError('visits')));
   // 게시판
-  unsubs.push(DB.collection('posts').orderBy('ts', 'desc').onSnapshot(q => {
+  unsubs.push(DB.collection('posts').orderBy('ts', 'desc').onSnapshot({ includeMetadataChanges: true }, q => {
+    if (!active()) return;
     S.data.posts = q.docs.map(d => Object.assign({ id: d.id }, d.data()));
+    markInitialDataLoaded('posts', q);
     maybeRender();
-  }, e => console.error(e)));
-  unsubs.push(DB.collection('comments').orderBy('ts', 'asc').onSnapshot(q => {
+  }, onLoadError('posts')));
+  unsubs.push(DB.collection('comments').orderBy('ts', 'asc').onSnapshot({ includeMetadataChanges: true }, q => {
+    if (!active()) return;
     S.data.comments = q.docs.map(d => Object.assign({ id: d.id }, d.data()));
+    markInitialDataLoaded('comments', q);
     maybeRender();
-  }, e => console.error(e)));
-  unsubs.push(DB.collection('events').orderBy('date', 'asc').onSnapshot(q => {
+  }, onLoadError('comments')));
+  unsubs.push(DB.collection('events').orderBy('date', 'asc').onSnapshot({ includeMetadataChanges: true }, q => {
+    if (!active()) return;
     S.data.events = q.docs.map(d => Object.assign({ id: d.id }, d.data()));
+    markInitialDataLoaded('events', q);
     maybeRender();
-  }, e => console.error(e)));
-  unsubs.push(DB.collection('eventVotes').onSnapshot(q => {
+  }, onLoadError('events')));
+  unsubs.push(DB.collection('eventVotes').onSnapshot({ includeMetadataChanges: true }, q => {
+    if (!active()) return;
     S.data.eventVotes = q.docs.map(d => Object.assign({ id: d.id }, d.data()));
+    markInitialDataLoaded('eventVotes', q);
     maybeRender();
-  }, e => console.error(e)));
+  }, onLoadError('eventVotes')));
 }
 
 // 입력 중이면 화면을 갈아엎지 않음 (데이터만 갱신, 다음 동작 때 반영)
@@ -355,6 +427,19 @@ function retreatEventSection(studentList, teacherList) {
       <span style="font:600 16px Pretendard;color:#7a6234;transform:rotate(${S.retreatStatsOpen ? '180deg' : '0deg'});transition:transform .22s ease">⌄</span>
     </div>
     ${S.retreatStatsOpen ? `<div style="margin:0 20px;animation:sectionReveal .2s ease-out">${userRetreatRows(teacherList)}${retreatStats(studentList, teacherList)}</div>` : ''}`;
+}
+
+// ══ 최초 Firestore 동기화 화면
+function dataSyncView() {
+  const hasError = !!S.dataError;
+  const isSlow = !hasError && S.dataSlow;
+  return `<div class="app-shell" style="height:100vh;height:100dvh;display:flex;align-items:center;justify-content:center;padding:32px">
+    <div style="width:100%;max-width:420px;text-align:center;background:#fff;border:1px solid ${hasError || isSlow ? '#d8bfa8' : '#e8e4da'};border-radius:16px;padding:28px 22px;box-shadow:0 8px 28px rgba(33,31,26,.08)" ${hasError ? 'role="alert"' : 'role="status"'}>
+      <div style="font:600 22px 'MaruBuri',serif;color:#211f1a">${hasError ? '데이터를 불러오지 못했습니다' : isSlow ? '데이터 동기화가 지연되고 있습니다' : '교회 데이터를 불러오는 중입니다'}</div>
+      <div style="font:400 13px Pretendard;color:#6d6a5f;line-height:1.65;margin-top:10px">${hasError ? esc(S.dataError) + '<br>기존 데이터는 변경되지 않았습니다.' : isSlow ? '네트워크 연결을 확인한 뒤 다시 시도해주세요.<br>기존 데이터는 변경되지 않았습니다.' : '반·학생·출석·게시판·일정을 안전하게 동기화하고 있습니다.<br>잠시만 기다려주세요.'}</div>
+      ${hasError || isSlow ? '<button type="button" onclick="location.reload()" style="margin-top:18px;padding:11px 18px;border:0;border-radius:10px;background:#2e5d47;color:#fff;font:600 13px Pretendard;cursor:pointer">다시 불러오기</button>' : '<div style="width:38px;height:4px;border-radius:99px;background:#2e5d47;margin:20px auto 0;animation:sectionReveal .8s ease-in-out infinite alternate"></div>'}
+    </div>
+  </div>`;
 }
 
 // ══ 설정 안내 화면 (firebase-config.js 미입력 시)
@@ -1226,6 +1311,7 @@ function render() {
   if (configMissing()) { el.innerHTML = setupView(); return; }
   if (!S.loaded) { el.innerHTML = '<div style="text-align:center;padding:60px;font:500 14px Pretendard;color:#8a8578">불러오는 중…</div>'; return; }
   if (!S.me) { el.innerHTML = loginView(); return; }
+  if (!S.dataReady) { el.innerHTML = dataSyncView(); return; }
 
   const isPastor = S.me.role === 'pastor';
   const scopeCls = isPastor ? S.cls : S.me.cls;

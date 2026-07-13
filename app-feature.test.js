@@ -24,9 +24,16 @@ vm.runInContext(source + `
   ;globalThis.__feature = {
     normalizeBoardCategory, boardCategoryMeta,
     eventOccursOn, eventOverlaps, eventRangeLabel,
-    attendanceStatus, classAttendanceStats, curWeek
+    attendanceStatus, classAttendanceStats, curWeek,
+    resetInitialDataLoad, markInitialDataLoaded,
+    isUnconfirmedMissingDocument,
+    setAuthState: (epoch, user) => { authEpoch = epoch; AUTH = { currentUser: user }; },
+    isCurrentAuthSession,
+    initialDataState: () => ({ ready: S.dataReady, error: S.dataError, pending: initialDataPending.size })
   };
   globalThis.__setData = value => { S.data = value; };
+  globalThis.__setSession = value => { Object.assign(S, value); };
+  globalThis.__render = render;
 `, context);
 
 const feature = context.__feature;
@@ -71,6 +78,38 @@ assert.deepEqual(JSON.parse(JSON.stringify(feature.classAttendanceStats('A'))), 
 assert.equal(feature.attendanceStatus({ att: { [week]: 'A' } }, week), 'A');
 assert.equal(feature.attendanceStatus({}, week), '');
 
+feature.resetInitialDataLoad();
+const pendingSnapshot = { metadata: { fromCache: true } };
+feature.markInitialDataLoaded('classes', pendingSnapshot);
+assert.deepEqual(JSON.parse(JSON.stringify(feature.initialDataState())), { ready: false, error: '', pending: 8 });
+assert.equal(feature.isUnconfirmedMissingDocument({ exists: false, metadata: { fromCache: true } }), true);
+assert.equal(feature.isUnconfirmedMissingDocument({ exists: false, metadata: { fromCache: false } }), false);
+['classes', 'users', 'students', 'visits', 'posts', 'comments', 'events'].forEach(key => feature.markInitialDataLoaded(key));
+assert.equal(feature.initialDataState().ready, false);
+assert.equal(feature.initialDataState().pending, 1);
+feature.markInitialDataLoaded('eventVotes');
+assert.deepEqual(JSON.parse(JSON.stringify(feature.initialDataState())), { ready: true, error: '', pending: 0 });
+
+const authUser = { uid: 'user-a' };
+feature.setAuthState(4, authUser);
+assert.equal(feature.isCurrentAuthSession(authUser, 4), true);
+assert.equal(feature.isCurrentAuthSession(authUser, 3), false);
+assert.equal(feature.isCurrentAuthSession({ uid: 'user-b' }, 4), false);
+
+context.FIREBASE_CONFIG = { apiKey: 'test' };
+context.__setSession({ loaded: true, me: { email: 'pastor@example.com', name: '관리자', role: 'pastor', cls: '전체' }, dataReady: false, dataError: '' });
+context.__render();
+assert.match(app.innerHTML, /교회 데이터를 불러오는 중입니다/);
+assert.doesNotMatch(app.innerHTML, /재적 0|아직 학생이 없습니다|등록된 반이 없습니다/);
+context.__setSession({ dataError: '학생 데이터를 불러오지 못했습니다.' });
+context.__render();
+assert.match(app.innerHTML, /데이터를 불러오지 못했습니다/);
+assert.match(app.innerHTML, /기존 데이터는 변경되지 않았습니다/);
+context.__setSession({ dataError: '', dataSlow: true });
+context.__render();
+assert.match(app.innerHTML, /데이터 동기화가 지연되고 있습니다/);
+assert.match(app.innerHTML, /다시 불러오기/);
+
 assert.match(html, /\.app-shell\{max-width:1180px\}/);
 assert.match(html, /@media \(min-width:768px\)/);
 assert.doesNotMatch(source, /max-width:390px/);
@@ -78,5 +117,12 @@ assert.match(source, /BOARD_CATEGORIES = \['\uACF5\uC9C0', '\uB098\uB214', '\uD6
 assert.match(source, /id="event-end-date"/);
 assert.match(source, /doc\(S\.me\.email\)\.update\(\{ \['att\.' \+ CUR\]/);
 assert.match(source, /\[\['students', '\uD559\uC0DD'\], \['teachers', '\uAD50\uC0AC'\]\]/);
+assert.equal((source.match(/onSnapshot\(\{ includeMetadataChanges: true \}/g) || []).length, 8);
+assert.match(source, /attach\(epoch\)/);
+assert.equal((source.match(/if \(!active\(\)\) return;/g) || []).length >= 9, true);
+assert.equal((source.match(/onLoadError\('[A-Za-z]+'\)/g) || []).length, 8);
+const cachedMissingGuard = source.indexOf('if (isUnconfirmedMissingDocument(d)) return;');
+const configWrite = source.indexOf("DB.collection('meta').doc('config').set");
+assert.equal(cachedMissingGuard > 0 && cachedMissingGuard < configWrite, true);
 
 console.log('feature regression tests passed');
