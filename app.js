@@ -6,6 +6,7 @@ let S = {
   me: null, data: { classes: [], users: [], students: [], visits: [], posts: [], comments: [], events: [], eventVotes: [] },
   cls: '전체', screen: 'home', sid: null, toast: '',
   vOpen: false, vType: '심방', careMode: 'visits', communityMode: 'board',
+  attendanceTab: 'students',
   boardOpen: false, boardPostId: null, boardEditId: null,
   calendarMonth: null, calendarDate: null, eventOpen: false, eventEditId: null, eventPollEnabled: false,
   edOn: false, edSacr: '없음', adOpen: false,
@@ -22,7 +23,7 @@ const FORM_IDS = ['lg-id', 'v-text', 'v-stu', 'ad-name', 'ad-phone', 'ad-birth',
   'ed-name', 'ed-phone', 'ed-fatherPhone', 'ed-motherPhone', 'ed-parentPhone', 'ed-address', 'ed-birth', 'ed-school', 'ed-trait',
   'pw-old', 'pw-new', 'u-name', 'u-username', 'u-pw', 'u-role', 'u-cls', 'cls-text', 'note-text',
   'board-category', 'board-title', 'board-body', 'comment-body',
-  'event-title', 'event-date', 'event-time', 'event-note'];
+  'event-title', 'event-date', 'event-end-date', 'event-time', 'event-note'];
 let F = {};
 function capture() { FORM_IDS.forEach(id => { const e = document.getElementById(id); if (e) F[id] = e.value; }); }
 function clearF(prefix) { Object.keys(F).forEach(k => { if (k.startsWith(prefix)) delete F[k]; }); }
@@ -50,6 +51,7 @@ const RETREAT_TEACHER_OPTIONS = ['\uBBF8\uC120\uD0DD', '\uCC38\uC11D', '\uBD88\u
 const RETREAT_START = '2026-07-12', RETREAT_END = '2026-07-26';
 const retreatActive = () => { const t = todayISO(); return t >= RETREAT_START && t <= RETREAT_END; };
 const DEFAULT_CLASSES = ['중1-1', '중1-2', '중2', '중3-1', '중3-2', '중3-3', '고1-1', '고1-2', '고2', '고3'];
+const BOARD_CATEGORIES = ['공지', '나눔', '회의록'];
 
 // ── 데이터 헬퍼
 const students = () => S.data.students || [];
@@ -60,6 +62,29 @@ const events = () => S.data.events || [];
 const eventVotes = () => S.data.eventVotes || [];
 const classes = () => S.data.classes || [];
 const users = () => S.data.users || [];
+function normalizeBoardCategory(value) { return BOARD_CATEGORIES.includes(value) ? value : '공지'; }
+function boardCategoryMeta(value) {
+  const category = normalizeBoardCategory(value);
+  if (category === '회의록') return { label: '회의록', color: '#4c6b82', background: '#e5edf2' };
+  if (category === '나눔') return { label: '나눔', color: '#2e5d47', background: '#e2eae2' };
+  return { label: '공지', color: '#7a6234', background: '#efe7d3' };
+}
+function eventStart(event) { return String((event && (event.date || event.startDate)) || ''); }
+function eventEnd(event) { return String((event && event.endDate) || eventStart(event)); }
+function eventOccursOn(event, date) {
+  const start = eventStart(event), end = eventEnd(event);
+  return !!start && !!date && start <= date && date <= end;
+}
+function eventOverlaps(event, start, end) {
+  const eventStartDate = eventStart(event), eventEndDate = eventEnd(event);
+  return !!eventStartDate && eventStartDate <= end && eventEndDate >= start;
+}
+function eventRangeLabel(event) {
+  const start = eventStart(event), end = eventEnd(event);
+  return start && end && start !== end ? md(start) + '–' + md(end) : md(start);
+}
+function attendanceStatus(record, week) { return record && record.att ? record.att[week] || '' : ''; }
+function attendanceLabel(status) { return ({ P: '출석', L: '지각', A: '결석' })[status] || '미체크'; }
 function teacherOf(cls) { const u = users().find(x => x.role === 'teacher' && x.cls === cls); return u ? u.name : '담당 미지정'; }
 const stuOf = cls => students().filter(s => s.cls === cls);
 const isNew = st => !st.att || Object.keys(st.att).filter(w => st.att[w]).length === 0;
@@ -101,6 +126,14 @@ function weekVisited(st) {
   const CUR = curWeek();
   if (st.vchk && st.vchk[CUR] !== undefined) return st.vchk[CUR];
   return visits().some(x => x.sid === st.id && inCurWeek(x.date));
+}
+function classAttendanceStats(cls) {
+  const list = stuOf(cls), week = curWeek();
+  return {
+    total: list.length,
+    checked: list.filter(student => attendanceStatus(student, week)).length,
+    visited: list.filter(weekVisited).length
+  };
 }
 const sortV = (a, b) => (b.date > a.date ? 1 : b.date < a.date ? -1 : (b.ts || 0) - (a.ts || 0));
 function scopeStudents() {
@@ -326,7 +359,7 @@ function retreatEventSection(studentList, teacherList) {
 
 // ══ 설정 안내 화면 (firebase-config.js 미입력 시)
 function setupView() {
-  return `<div style="width:100%;max-width:390px;margin:0 auto;min-height:100vh;overflow-x:hidden;background:#faf8f3;display:flex;flex-direction:column;justify-content:center;padding:36px 28px;box-shadow:0 0 40px rgba(33,31,26,.15)">
+  return `<div class="auth-shell" style="min-height:100vh;min-height:100dvh;overflow-x:hidden;display:flex;flex-direction:column;justify-content:center;padding:36px 28px">
     <div style="font:600 26px 'MaruBuri',serif;color:#211f1a">설정이 필요합니다</div>
     <div style="font:400 14px Pretendard;color:#6d6a5f;margin-top:14px;line-height:1.7">
       <b>firebase-config.js</b> 파일에 Firebase 설정값이 아직 입력되지 않았습니다.<br><br>
@@ -357,7 +390,7 @@ function loginView() {
       capture(); render();
     }
   });
-  return `<div style="width:100%;max-width:390px;margin:0 auto;min-height:100vh;overflow-x:hidden;background:#faf8f3;display:flex;flex-direction:column;justify-content:center;padding:36px 28px;box-shadow:0 0 40px rgba(33,31,26,.15)">
+  return `<div class="auth-shell" style="min-height:100vh;min-height:100dvh;overflow-x:hidden;display:flex;flex-direction:column;justify-content:center;padding:36px 28px">
     <div style="font:600 12px Pretendard;color:#8a8578;letter-spacing:.08em">CHURCH STUDENT CARE</div>
     <div style="font:600 32px 'MaruBuri',serif;color:#211f1a;margin-top:10px">중고등부<br>학생관리</div>
     <div style="font:400 14px Pretendard;color:#6d6a5f;margin-top:10px">교사·교역자 전용 페이지입니다.</div>
@@ -430,7 +463,7 @@ function overviewView() {
       <div style="padding:14px 0;text-align:center"><div style="font:600 22px 'MaruBuri',serif;color:#2e5d47">${ovVisits}</div><div style="font:500 11px Pretendard;color:#8a8578;margin-top:2px">이번달 심방</div></div>
     </div>
     <div style="${secLabel};padding-top:20px;padding-bottom:8px">반별 현황 · 지난주 기준</div>
-    <div style="display:flex;flex-direction:column;gap:8px;padding:0 20px">${rows || `<div style="font:400 13px Pretendard;color:#b5b0a2;padding:8px 2px">아직 반이 없습니다. 설정에서 반을 추가하세요.</div>`}</div>
+    <div class="dashboard-card-grid" style="padding:0 20px">${rows || `<div style="font:400 13px Pretendard;color:#b5b0a2;padding:8px 2px">아직 반이 없습니다. 설정에서 반을 추가하세요.</div>`}</div>
     ${shirtEventSection(users(), D.concat(users()))}
     ${retreatEventSection(D, users())}
   </div>`;
@@ -531,17 +564,39 @@ function classHomeView(scopeCls) {
 // ══ 출석 반 선택 (교역자·전체)
 function attendPickView() {
   const CUR = curWeek();
+  const teacherList = users().filter(user => user.role === 'teacher').sort((a, b) => String(a.cls || '').localeCompare(String(b.cls || ''), 'ko') || String(a.name || '').localeCompare(String(b.name || ''), 'ko'));
+  const teacherChecked = teacherList.filter(user => attendanceStatus(user, CUR)).length;
+  const tabs = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:4px;background:#eeeade;border-radius:12px">
+    ${[['students', '학생'], ['teachers', '교사']].map(([key, label]) => `<div onclick="${h(() => up(() => { S.attendanceTab = key; }))}" role="button" aria-pressed="${S.attendanceTab === key}" style="text-align:center;padding:9px;border-radius:9px;cursor:pointer;font:700 13px Pretendard;${S.attendanceTab === key ? 'background:#fff;color:#211f1a;box-shadow:0 1px 4px rgba(33,31,26,.12)' : 'color:#8a8578'}">${label}</div>`).join('')}
+  </div>`;
+  const studentCards = classes().map(c => {
+    const stats = classAttendanceStats(c);
+    const attendanceDone = stats.total > 0 && stats.checked === stats.total;
+    const visitDone = stats.total > 0 && stats.visited === stats.total;
+    return `<div onclick="${h(() => up(() => { S.cls = c; }))}" style="background:#fff;border:1px solid #e8e4da;border-radius:12px;padding:16px 14px;cursor:pointer">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px"><div style="font:600 17px 'MaruBuri',serif;color:#211f1a">${esc(c)}</div><div style="font:500 11px Pretendard;color:#8a8578">${esc(teacherOf(c))}</div></div>
+      <div style="display:flex;justify-content:space-between;gap:8px;margin-top:12px;font:600 12px Pretendard;color:${attendanceDone ? '#2e5d47' : '#6d6a5f'}"><span>출석 체크</span><span>${stats.checked}/${stats.total}${attendanceDone ? ' ✓' : ''}</span></div>
+      <div style="height:4px;background:#eeeade;border-radius:99px;margin-top:5px;overflow:hidden"><div style="width:${Math.round(stats.checked / (stats.total || 1) * 100)}%;height:100%;background:#2e5d47;border-radius:99px"></div></div>
+      <div style="display:flex;justify-content:space-between;gap:8px;margin-top:10px;font:600 12px Pretendard;color:${visitDone ? '#7a6234' : '#8a8578'}"><span>심방 완료</span><span>${stats.visited}/${stats.total}${visitDone ? ' ✓' : ''}</span></div>
+      <div style="height:4px;background:#eeeade;border-radius:99px;margin-top:5px;overflow:hidden"><div style="width:${Math.round(stats.visited / (stats.total || 1) * 100)}%;height:100%;background:#7a6234;border-radius:99px"></div></div>
+    </div>`;
+  }).join('');
+  const teacherCards = teacherList.map(user => {
+    const status = attendanceStatus(user, CUR), label = attendanceLabel(status);
+    const meta = status === 'P' ? ['#2e5d47', '#e2eae2'] : status === 'L' ? ['#7a6234', '#efe7d3'] : status === 'A' ? ['#a3552e', '#f2e2d6'] : ['#8a8578', '#eeeade'];
+    return `<div style="display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #e8e4da;border-radius:12px;padding:14px">
+      <div style="width:38px;height:38px;border-radius:50%;background:#ddd6c6;display:flex;align-items:center;justify-content:center;font:600 13px Pretendard;color:#5c584c;flex:none">${esc(ini(user.name))}</div>
+      <div style="flex:1"><div style="font:600 15px Pretendard;color:#211f1a">${esc(user.name)}</div><div style="font:400 12px Pretendard;color:#8a8578;margin-top:2px">${esc(user.cls || '담당 반 미지정')}</div></div>
+      <span style="font:700 11px Pretendard;color:${meta[0]};background:${meta[1]};padding:6px 10px;border-radius:99px">${label}</span>
+    </div>`;
+  }).join('');
+  const isTeachers = S.attendanceTab === 'teachers';
   return `<div style="padding:20px">
-    <div style="font:500 13px Pretendard;color:#6d6a5f;margin-bottom:12px">출석체크할 반을 선택하세요.</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-      ${classes().map(c => {
-        const list = stuOf(c);
-        const done = list.filter(x => x.att && x.att[CUR]).length;
-        return `<div onclick="${h(() => up(() => { S.cls = c; }))}" style="background:#fff;border:1px solid #e8e4da;border-radius:12px;padding:16px 14px;cursor:pointer">
-          <div style="font:600 17px 'MaruBuri',serif;color:#211f1a">${esc(c)}</div>
-          <div style="font:400 12px Pretendard;color:#8a8578;margin-top:3px">${done ? done + '/' + list.length + ' 체크됨' : '미체크 · ' + list.length + '명'}</div>
-        </div>`;
-      }).join('')}
+    <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:12px"><div><div style="font:600 18px 'MaruBuri',serif;color:#211f1a">출석 전체 대시보드</div><div style="font:400 12px Pretendard;color:#8a8578;margin-top:3px">${md(CUR)} 주일 기준</div></div><div style="font:600 12px Pretendard;color:#2e5d47">${isTeachers ? teacherChecked + '/' + teacherList.length + ' 교사 체크' : '반별 현황'}</div></div>
+    ${tabs}
+    <div style="font:500 13px Pretendard;color:#6d6a5f;margin:14px 0 10px">${isTeachers ? '교사가 직접 체크한 금주 출석입니다.' : '반별 출석 체크와 심방 완료 현황입니다.'}</div>
+    <div class="${isTeachers ? 'teacher-attendance-grid' : 'attendance-class-grid'}" style="gap:8px">
+      ${isTeachers ? (teacherCards || `<div style="font:400 13px Pretendard;color:#b5b0a2;padding:8px 2px">등록된 교사가 없습니다.</div>`) : (studentCards || `<div style="font:400 13px Pretendard;color:#b5b0a2;padding:8px 2px">등록된 반이 없습니다.</div>`)}
     </div>
   </div>`;
 }
@@ -553,6 +608,18 @@ function attendView(scopeCls) {
   const done = list.filter(x => x.att && x.att[CUR]).length;
   const REASONS = ['질병', '학원·시험', '가족 일정', '여행', '미입력'];
   const btn = (on, color) => 'cursor:pointer;flex:none;white-space:nowrap;font:600 13px Pretendard;padding:9px 11px;border-radius:9px;' + (on ? 'color:#fff;background:' + color : 'color:#8a8578;background:#f3efe6');
+  const myUser = S.me.role === 'teacher' ? users().find(user => user.email === S.me.email) : null;
+  const myStatus = attendanceStatus(myUser, CUR);
+  const setMyAttendance = status => h(async () => {
+    const nextValue = myStatus === status ? FV().delete() : status;
+    const okd = await fsTry(DB.collection('users').doc(S.me.email).update({ ['att.' + CUR]: nextValue }));
+    if (okd) flash(myStatus === status ? '내 출석 체크를 취소했어요' : '내 출석을 ' + attendanceLabel(status) + '으로 저장했어요');
+  });
+  const myAttendance = myUser ? `<div style="margin:16px 20px 0;background:#fff;border:1px solid #cfc9ba;border-radius:14px;padding:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><div><div style="font:600 15px 'MaruBuri',serif;color:#211f1a">내 출석</div><div style="font:400 11.5px Pretendard;color:#8a8578;margin-top:3px">교사 본인의 ${md(CUR)} 주일 출석을 체크하세요.</div></div><span style="font:700 11px Pretendard;color:${myStatus ? '#2e5d47' : '#a3552e'}">${attendanceLabel(myStatus)}</span></div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:12px">${[['P','출석','#2e5d47'],['L','지각','#b0913e'],['A','결석','#a3552e']].map(([status, label, color]) => `<span onclick="${setMyAttendance(status)}" style="${btn(myStatus === status, color)};text-align:center">${label}</span>`).join('')}</div>
+    <div style="font:400 10.5px Pretendard;color:#b5b0a2;margin-top:8px">선택한 항목을 한 번 더 누르면 체크를 취소합니다.</div>
+  </div>` : '';
   const rows = list.map(x => {
     const a = x.att && x.att[CUR];
     const set = val => h(async () => {
@@ -578,6 +645,7 @@ function attendView(scopeCls) {
   }).join('');
   const left = list.length - done;
   return `<div>
+    ${myAttendance}
     <div style="padding:16px 20px 0">
       <div style="display:flex;justify-content:space-between;align-items:baseline">
         <div style="font:600 13px Pretendard;color:#6d6a5f">${esc(scopeCls)}반 · ${md(CUR)} 주일</div>
@@ -709,7 +777,7 @@ function boardView() {
   });
   const submit = h(async () => {
     capture();
-    const category = ['공지', '나눔'].includes(fv('board-category')) ? fv('board-category') : '공지';
+    const category = normalizeBoardCategory(fv('board-category'));
     const title = fv('board-title').trim().slice(0, 80);
     const body = fv('board-body').trim().slice(0, 2000);
     if (!title || !body) { flash('제목과 내용을 입력해주세요'); return; }
@@ -723,8 +791,7 @@ function boardView() {
   const form = S.boardOpen ? `<div style="margin:14px 20px 0;background:#fff;border:1px solid #cfc9ba;border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:9px;animation:sectionReveal .2s ease-out">
     <div style="font:600 15px 'MaruBuri',serif;color:#211f1a">${S.boardEditId ? '게시글 수정' : '새 게시글'}</div>
     <select id="board-category" style="${inputStyle}">
-      <option value="공지" ${fv('board-category') !== '나눔' ? 'selected' : ''}>공지사항</option>
-      <option value="나눔" ${fv('board-category') === '나눔' ? 'selected' : ''}>교사 나눔</option>
+      ${BOARD_CATEGORIES.map(category => `<option value="${category}" ${normalizeBoardCategory(fv('board-category')) === category ? 'selected' : ''}>${category === '공지' ? '공지사항' : category === '나눔' ? '교사 나눔' : '회의록'}</option>`).join('')}
     </select>
     <input id="board-title" maxlength="80" value="${esc(fv('board-title'))}" placeholder="제목" style="${inputStyle}">
     <textarea id="board-body" maxlength="2000" placeholder="함께 공유할 내용을 입력하세요" style="${inputStyle};min-height:120px;resize:vertical;line-height:1.55">${esc(fv('board-body'))}</textarea>
@@ -734,6 +801,7 @@ function boardView() {
   const selected = S.boardPostId ? posts().find(x => x.id === S.boardPostId) : null;
   if (S.boardPostId && !selected) S.boardPostId = null;
   if (selected) {
+    const categoryMeta = boardCategoryMeta(selected.category);
     const postComments = comments().filter(x => x.postId === selected.id);
     const canEdit = selected.authorEmail === S.me.email;
     const canDelete = isPastor || canEdit;
@@ -760,7 +828,7 @@ function boardView() {
     return `<div>
       <div style="padding:14px 20px 0"><span onclick="${h(() => up(() => { S.boardPostId = null; clearF('comment-'); }))}" style="font:600 13px Pretendard;color:#2e5d47;cursor:pointer">‹ 목록으로</span></div>
       <article style="margin:12px 20px 0;background:#fff;border:1px solid #d8cdb5;border-radius:14px;padding:17px 16px">
-        <div style="display:flex;align-items:center;gap:7px"><span style="font:700 10.5px Pretendard;color:${selected.category === '공지' ? '#7a6234' : '#2e5d47'};background:${selected.category === '공지' ? '#efe7d3' : '#e2eae2'};padding:4px 8px;border-radius:99px">${esc(selected.category === '나눔' ? '나눔' : '공지')}</span><span style="margin-left:auto;display:flex;gap:10px">${edit}${del}</span></div>
+        <div style="display:flex;align-items:center;gap:7px"><span style="font:700 10.5px Pretendard;color:${categoryMeta.color};background:${categoryMeta.background};padding:4px 8px;border-radius:99px">${esc(categoryMeta.label)}</span><span style="margin-left:auto;display:flex;gap:10px">${edit}${del}</span></div>
         <h2 style="font:600 20px 'MaruBuri',serif;color:#211f1a;line-height:1.4;margin:12px 0 0">${esc(selected.title)}</h2>
         <div style="font:400 11.5px Pretendard;color:#b5b0a2;margin-top:7px">${esc(selected.authorName || '작성자')} · ${esc(selected.cls || '')} · ${stamp(selected.ts)}${selected.updatedTs ? ' · 수정됨' : ''}</div>
         <div style="font:400 14px Pretendard;color:#3f3c35;line-height:1.75;margin-top:20px;white-space:pre-wrap;overflow-wrap:anywhere">${esc(selected.body)}</div>
@@ -776,14 +844,15 @@ function boardView() {
 
   const rows = posts().map(post => {
     const commentCount = comments().filter(x => x.postId === post.id).length;
+    const categoryMeta = boardCategoryMeta(post.category);
     return `<div onclick="${h(() => up(() => { S.boardPostId = post.id; S.boardOpen = false; }))}" style="display:flex;align-items:center;gap:10px;padding:14px 4px;border-bottom:1px solid #e8e4da;cursor:pointer">
-      <div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:6px"><span style="font:700 10.5px Pretendard;color:${post.category === '공지' ? '#7a6234' : '#2e5d47'}">${post.category === '공지' ? '공지' : '나눔'}</span><span style="font:600 15px Pretendard;color:#211f1a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(post.title)}</span></div><div style="font:400 11.5px Pretendard;color:#8a8578;margin-top:6px">${esc(post.authorName || '작성자')} · ${esc(post.cls || '')} · ${stamp(post.ts)} · 공감 ${(post.likedBy || []).length}</div></div>
+      <div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:6px"><span style="font:700 10.5px Pretendard;color:${categoryMeta.color}">${esc(categoryMeta.label)}</span><span style="font:600 15px Pretendard;color:#211f1a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(post.title)}</span></div><div style="font:400 11.5px Pretendard;color:#8a8578;margin-top:6px">${esc(post.authorName || '작성자')} · ${esc(post.cls || '')} · ${stamp(post.ts)} · 공감 ${(post.likedBy || []).length}</div></div>
       <div style="width:42px;height:48px;border-radius:10px;background:#f4f1ea;display:flex;flex-direction:column;align-items:center;justify-content:center;flex:none"><b style="font:700 14px Pretendard;color:#211f1a">${commentCount}</b><span style="font:500 10px Pretendard;color:#8a8578">댓글</span></div>
     </div>`;
   }).join('');
   return `<div>
     <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px 0">
-      <div><div style="font:600 17px 'MaruBuri',serif;color:#211f1a">중고등부 게시판</div><div style="font:400 12px Pretendard;color:#8a8578;margin-top:3px">공지와 교사 나눔을 함께 확인하세요.</div></div>
+      <div><div style="font:600 17px 'MaruBuri',serif;color:#211f1a">중고등부 게시판</div><div style="font:400 12px Pretendard;color:#8a8578;margin-top:3px">공지·나눔·회의록을 함께 확인하세요.</div></div>
       <div onclick="${h(() => up(() => { S.boardOpen = !S.boardOpen; S.boardEditId = null; if (!S.boardOpen) clearF('board-'); }))}" style="font:600 13px Pretendard;color:#f5f2ea;background:#2e5d47;padding:8px 13px;border-radius:99px;cursor:pointer">${S.boardOpen ? '닫기' : '+ 글쓰기'}</div>
     </div>
     ${form}
@@ -800,7 +869,9 @@ function calendarView() {
   const [year, monthNum] = month.split('-').map(Number);
   const firstDay = new Date(year, monthNum - 1, 1).getDay();
   const daysInMonth = new Date(year, monthNum, 0).getDate();
-  const monthEvents = events().filter(x => String(x.date || '').startsWith(month));
+  const monthStart = month + '-01';
+  const monthEnd = month + '-' + String(daysInMonth).padStart(2, '0');
+  const monthEvents = events().filter(x => eventOverlaps(x, monthStart, monthEnd));
   const moveMonth = delta => h(() => up(() => {
     const d = new Date(year, monthNum - 1 + delta, 1);
     S.calendarMonth = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
@@ -810,23 +881,25 @@ function calendarView() {
   for (let i = 0; i < firstDay; i++) cells.push('<div style="min-height:54px"></div>');
   for (let day = 1; day <= daysInMonth; day++) {
     const date = month + '-' + String(day).padStart(2, '0');
-    const count = monthEvents.filter(x => x.date === date).length;
+    const count = monthEvents.filter(x => eventOccursOn(x, date)).length;
     const selected = S.calendarDate === date, isToday = today === date;
-    cells.push(`<div onclick="${h(() => up(() => { S.calendarDate = date; S.eventOpen = false; S.eventEditId = null; S.eventPollEnabled = false; clearF('event-'); }))}" style="min-height:54px;padding:7px 4px;border-radius:10px;cursor:pointer;text-align:center;${selected ? 'background:#2e5d47;color:#fff' : 'background:#fff;color:#211f1a'};${isToday && !selected ? 'box-shadow:inset 0 0 0 1.5px #7a6234' : ''}">
+    cells.push(`<div class="calendar-cell" onclick="${h(() => up(() => { S.calendarDate = date; S.eventOpen = false; S.eventEditId = null; S.eventPollEnabled = false; clearF('event-'); }))}" style="padding:7px 4px;border-radius:10px;cursor:pointer;text-align:center;${selected ? 'background:#2e5d47;color:#fff' : 'background:#fff;color:#211f1a'};${isToday && !selected ? 'box-shadow:inset 0 0 0 1.5px #7a6234' : ''}">
       <div style="font:600 12px Pretendard">${day}</div>
       ${count ? `<div style="display:flex;justify-content:center;gap:2px;margin-top:7px">${Array.from({ length: Math.min(count, 3) }, () => `<span style="width:4px;height:4px;border-radius:50%;background:${selected ? '#f5f2ea' : '#a3552e'}"></span>`).join('')}</div>` : ''}
     </div>`);
   }
-  const selectedEvents = events().filter(x => x.date === S.calendarDate).sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')));
+  const selectedEvents = events().filter(x => eventOccursOn(x, S.calendarDate)).sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')));
   const submit = h(async () => {
     capture();
     const title = fv('event-title').trim().slice(0, 80);
     const date = fv('event-date') || S.calendarDate;
+    const endDate = fv('event-end-date') || date;
     const time = fv('event-time').slice(0, 5);
     const note = fv('event-note').trim().slice(0, 1000);
     if (!title || !date) { flash('일정 제목과 날짜를 입력해주세요'); return; }
+    if (endDate < date) { flash('종료일은 시작일보다 빠를 수 없습니다'); return; }
     const editing = S.eventEditId && events().find(x => x.id === S.eventEditId && x.authorEmail === S.me.email);
-    const payload = { title, date, time, note, pollEnabled: S.eventPollEnabled };
+    const payload = { title, date, endDate, time, note, pollEnabled: S.eventPollEnabled };
     let action;
     if (editing && editing.pollEnabled && !S.eventPollEnabled) {
       const batch = DB.batch();
@@ -841,7 +914,11 @@ function calendarView() {
   const form = S.eventOpen ? `<div style="margin-top:10px;background:#fff;border:1px solid #cfc9ba;border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:8px;animation:sectionReveal .2s ease-out">
     <div style="font:600 14px 'MaruBuri',serif;color:#211f1a">${S.eventEditId ? '일정 수정' : '새 일정'}</div>
     <input id="event-title" maxlength="80" value="${esc(fv('event-title'))}" placeholder="일정 제목" style="${inputStyle}">
-    <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:8px"><input id="event-date" type="date" value="${esc(fv('event-date') || S.calendarDate)}" style="${inputStyle}"><input id="event-time" type="time" value="${esc(fv('event-time'))}" style="${inputStyle}"></div>
+    <div class="event-date-grid">
+      <label style="font:600 11px Pretendard;color:#8a8578">시작일<input id="event-date" type="date" value="${esc(fv('event-date') || S.calendarDate)}" onchange="const end=document.getElementById('event-end-date');end.min=this.value;if(!end.value||end.value&lt;this.value)end.value=this.value" style="${inputStyle};width:100%;margin-top:5px"></label>
+      <label style="font:600 11px Pretendard;color:#8a8578">종료일<input id="event-end-date" type="date" min="${esc(fv('event-date') || S.calendarDate)}" value="${esc(fv('event-end-date') || fv('event-date') || S.calendarDate)}" style="${inputStyle};width:100%;margin-top:5px"></label>
+      <label class="event-time-field" style="font:600 11px Pretendard;color:#8a8578">시간 · 선택<input id="event-time" type="time" value="${esc(fv('event-time'))}" style="${inputStyle};width:100%;margin-top:5px"></label>
+    </div>
     <textarea id="event-note" maxlength="1000" placeholder="장소, 준비물, 안내사항 등" style="${inputStyle};min-height:74px;resize:vertical">${esc(fv('event-note'))}</textarea>
     <div onclick="${h(() => up(() => { S.eventPollEnabled = !S.eventPollEnabled; }))}" style="display:flex;align-items:center;gap:9px;padding:10px 11px;border:1px solid ${S.eventPollEnabled ? '#9db8a8' : '#e8e4da'};border-radius:10px;cursor:pointer;background:${S.eventPollEnabled ? '#f1f6f1' : '#faf8f3'}"><span style="width:20px;height:20px;border-radius:6px;display:flex;align-items:center;justify-content:center;font:700 12px Pretendard;${S.eventPollEnabled ? 'background:#2e5d47;color:#fff' : 'border:1.5px solid #cfc9ba;color:transparent'}">✓</span><div><div style="font:600 13px Pretendard;color:#211f1a">참석 여부 투표 사용</div><div style="font:400 11px Pretendard;color:#8a8578;margin-top:2px">참석·불참·미정으로 응답을 받습니다.</div></div></div>
     <div onclick="${submit}" style="${darkBtn}">${S.eventEditId ? '수정 저장' : '일정 등록'}</div>
@@ -849,7 +926,7 @@ function calendarView() {
   const eventRows = selectedEvents.map(event => {
     const canEdit = event.authorEmail === S.me.email;
     const canDelete = S.me.role === 'pastor' || canEdit;
-    const edit = canEdit ? `<span onclick="${h(() => up(() => { S.eventEditId = event.id; S.eventOpen = true; S.eventPollEnabled = !!event.pollEnabled; F['event-title'] = event.title || ''; F['event-date'] = event.date || S.calendarDate; F['event-time'] = event.time || ''; F['event-note'] = event.note || ''; }))}" style="font:500 11px Pretendard;color:#2e5d47;cursor:pointer">수정</span>` : '';
+    const edit = canEdit ? `<span onclick="${h(() => up(() => { S.eventEditId = event.id; S.eventOpen = true; S.eventPollEnabled = !!event.pollEnabled; F['event-title'] = event.title || ''; F['event-date'] = eventStart(event) || S.calendarDate; F['event-end-date'] = eventEnd(event) || S.calendarDate; F['event-time'] = event.time || ''; F['event-note'] = event.note || ''; }))}" style="font:500 11px Pretendard;color:#2e5d47;cursor:pointer">수정</span>` : '';
     const del = canDelete ? `<span onclick="${h(async () => { if (!confirm('이 일정과 투표 결과를 삭제할까요?')) return; const batch = DB.batch(); batch.delete(DB.collection('events').doc(event.id)); eventVotes().filter(v => v.eventId === event.id).forEach(v => batch.delete(DB.collection('eventVotes').doc(v.id))); const okd = await fsTry(batch.commit()); if (okd) flash('일정을 삭제했어요'); })}" style="font:500 11px Pretendard;color:#a3552e;cursor:pointer">삭제</span>` : '';
     const votes = eventVotes().filter(v => v.eventId === event.id);
     const myVote = votes.find(v => v.userEmail === S.me.email);
@@ -860,7 +937,7 @@ function calendarView() {
     });
     const voteBox = event.pollEnabled ? `<div style="margin-top:11px;padding-top:10px;border-top:1px solid #eeeade"><div style="display:flex;align-items:center;justify-content:space-between"><span style="font:600 11px Pretendard;color:#7a6234">참석 여부 · ${votes.length}명 응답</span></div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:7px">${['참석','불참','미정'].map(status => { const count = votes.filter(v => v.status === status).length; const on = myVote && myVote.status === status; return `<div onclick="${vote(status)}" style="text-align:center;padding:8px 4px;border-radius:9px;cursor:pointer;font:600 11.5px Pretendard;${on ? 'background:#2e5d47;color:#fff' : 'background:#faf8f3;color:#6d6a5f;border:1px solid #e8e4da'}">${status} ${count}</div>`; }).join('')}</div></div>` : '';
     return `<div style="background:#fff;border:1px solid #e8e4da;border-radius:12px;padding:13px 14px">
-      <div style="display:flex;align-items:center;gap:8px"><span style="font:700 12px Pretendard;color:#7a6234;min-width:38px">${esc(event.time || '종일')}</span><span style="font:600 14px Pretendard;color:#211f1a;flex:1">${esc(event.title)}</span>${edit}${del}</div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font:700 11.5px Pretendard;color:#7a6234;min-width:82px">${esc(eventRangeLabel(event))} · ${esc(event.time || '종일')}</span><span style="font:600 14px Pretendard;color:#211f1a;flex:1">${esc(event.title)}</span>${edit}${del}</div>
       ${event.note ? `<div style="font:400 12.5px Pretendard;color:#6d6a5f;line-height:1.55;margin-top:7px;white-space:pre-wrap">${esc(event.note)}</div>` : ''}
       <div style="font:400 11px Pretendard;color:#b5b0a2;margin-top:7px">${esc(event.authorName || '작성자')}${event.updatedTs ? ' · 수정됨' : ''}</div>${voteBox}
     </div>`;
@@ -1157,7 +1234,7 @@ function render() {
 
   let body = '';
   const screen = st ? 'student' : S.screen;
-  const viewKey = screen + ':' + (st ? st.id : scopeCls) + (screen === 'board' ? ':' + S.communityMode + ':' + (S.boardPostId || S.calendarMonth || 'list') : '') + (screen === 'carehub' ? ':' + S.careMode : '');
+  const viewKey = screen + ':' + (st ? st.id : scopeCls) + (screen === 'board' ? ':' + S.communityMode + ':' + (S.boardPostId || S.calendarMonth || 'list') : '') + (screen === 'carehub' ? ':' + S.careMode : '') + (screen === 'attend' && isPastor && scopeCls === '전체' ? ':' + S.attendanceTab : '');
   const nextScrollTop = scrollTarget(previousViewKey, viewKey, previousScrollTop, S.scrollPositions);
   if (screen === 'student') body = studentView(st);
   else if (screen === 'home') body = (isPastor && S.cls === '전체') ? overviewView() : classHomeView(scopeCls);
@@ -1175,7 +1252,7 @@ function render() {
     </div>`;
   }).join('');
 
-  el.innerHTML = `<div style="width:100%;max-width:390px;margin:0 auto;height:100vh;height:100dvh;overflow:hidden;background:#faf8f3;display:flex;flex-direction:column;box-shadow:0 0 40px rgba(33,31,26,.15);position:relative">
+  el.innerHTML = `<div class="app-shell" style="height:100vh;height:100dvh;overflow:hidden;display:flex;flex-direction:column;position:relative">
     ${headerView()}
     <div id="app-scroll" onscroll="onAppScroll(this)" style="flex:1;overflow-y:auto;padding-bottom:76px;overflow-anchor:none">${body}</div>
     ${S.toast ? `<div style="position:absolute;left:0;right:0;bottom:74px;display:flex;justify-content:center;pointer-events:none;z-index:5">
